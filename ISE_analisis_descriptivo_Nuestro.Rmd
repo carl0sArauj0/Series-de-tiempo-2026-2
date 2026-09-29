@@ -1,0 +1,562 @@
+---
+title: "Análisis Descriptivo de Series de Tiempo — Indicador de Seguimiento a la Economía (ISE)"
+author: "Carlos Araújo / Julián Mesa"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  warning = FALSE, 
+  message = FALSE,
+  fig.width = 10, 
+  fig.height = 5, 
+  fig.align = "center"
+)
+```
+
+# Análisis descriptivo de series de tiempo
+
+## Serie: Indicador de Seguimiento a la Economía (ISE) — Colombia
+
+**Fuente:** DANE (Departamento Administrativo Nacional de Estadística — Colombia).  
+**Metodología:** Índice sintético mensual (Base 2015 = 100) que mide la evolución de la actividad económica real en el corto plazo.
+
+---
+
+# PASO 0. Librerías
+
+```{r librerias}
+paquetes <- c("readxl", "tidyverse", "lubridate", "zoo", "xts",
+              "tsibble", "feasts", "fable", "timetk", "forecast",
+              "TSstudio", "astsa", "nonlinearTseries", "tseriesChaos",
+              "energy", "car", "biwavelet", "patchwork")
+
+paquetes_nuevos <- paquetes[!(paquetes %in% installed.packages()[, "Package"])]
+if (length(paquetes_nuevos) > 0) {
+  install.packages(paquetes_nuevos, dependencies = TRUE)
+}
+invisible(lapply(paquetes, library, character.only = TRUE))
+```
+
+---
+
+# PASO 1. Carga, limpieza y estructuración
+
+```{r carga_datos}
+ruta_archivo <- "ISE2005_2026.xlsx"
+if (!file.exists(ruta_archivo)) {
+  ruta_archivo <- "~/Documents/Github/Series-de-tiempo-2026-2/ISE2005_2026.xlsx"
+}
+if (!file.exists(ruta_archivo)) {
+  stop("No se encontró el archivo ISE2005_2026.xlsx en la carpeta de trabajo ni en la ruta alternativa.")
+}
+
+df_raw <- read_excel(ruta_archivo)
+```
+
+```{r limpieza_datos}
+df_ise <- df_raw %>%
+  rename(Fecha_raw = 1, Iset = 2) %>%
+  mutate(
+    Iset  = as.numeric(gsub(",", ".", as.character(Iset))),
+    Fecha = as.Date(parse_date_time(Fecha_raw, orders = c("dmy", "ymd", "mdy")))
+  ) %>%
+  filter(!is.na(Fecha), !is.na(Iset)) %>%
+  arrange(Fecha)
+```
+
+```{r objetos_temporales}
+fecha_inicio <- c(year(min(df_ise$Fecha)), month(min(df_ise$Fecha)))
+
+ise_ts <- ts(df_ise$Iset, start = fecha_inicio, frequency = 12)
+
+ise_tsbl <- df_ise %>%
+  mutate(Mes = yearmonth(Fecha)) %>%
+  as_tsibble(index = Mes)
+
+cat("=== INFORMACIÓN DE LA SERIE ORIGINAL ===\n")
+print(head(df_ise))
+print(summary(ise_ts))
+```
+
+---
+
+# PASO 2. Visualización exploratoria inicial
+
+```{r grafico_base}
+plot(ise_ts,
+     main = "ISE Colombia (2005 – Presente) — Serie original",
+     ylab = "Índice (Base 2015 = 100)", xlab = "Año",
+     col = "steelblue", lwd = 2)
+grid()
+```
+
+```{r grafico_tidy}
+df_ise %>%
+  plot_time_series(Fecha, Iset,
+                   .interactive = FALSE,
+                   .title = "Evolución mensual del ISE (serie original)",
+                   .y_lab = "Índice Base 2015 = 100")
+```
+
+---
+
+# PASO 3. Estabilización de la varianza marginal: Box-Cox y logarítmica
+
+```{r boxcox_lambda}
+lambda_loglik <- BoxCox.lambda(ise_ts, method = "loglik", lower = -1, upper = 3)
+
+cat("\n=== Parámetro lambda estimado (Log-Likelihood) ===\n")
+cat("Lambda (Log-Likelihood):", lambda_loglik, "\n")
+```
+
+```{r series_transformadas}
+ise_boxcox_ts <- BoxCox(ise_ts, lambda = lambda_loglik)
+ise_log_ts    <- log(ise_ts)
+
+ise_tsbl <- ise_tsbl %>%
+  mutate(
+    Iset_bc  = as.numeric(ise_boxcox_ts),
+    Iset_log = as.numeric(ise_log_ts)
+  )
+```
+
+```{r comparacion_transformaciones}
+par(mfrow = c(3, 1), mar = c(3, 4, 2, 2))
+
+plot(ise_ts, main = "1. Serie original: ISE",
+     ylab = "Nivel original", col = "steelblue", lwd = 2); grid()
+
+plot(ise_boxcox_ts,
+     main = paste0("2. Serie transformada Box-Cox (lambda = ",
+                   round(lambda_loglik, 4), ")"),
+     ylab = "Nivel transformado", col = "darkgreen", lwd = 2); grid()
+
+plot(ise_log_ts, main = "3. Serie transformada logarítmica (lambda = 0)",
+     ylab = "log(ISE)", col = "darkred", lwd = 2); grid()
+
+par(mfrow = c(1, 1))
+```
+
+---
+
+# PASO 4. Análisis de tendencia
+
+## 4.1 Tendencia por filtro de promedios móviles
+
+```{r tendencia_MA}
+tendencia_orig_ma <- forecast::ma(ise_ts,     order = 12, centre = TRUE)
+tendencia_log_ma  <- forecast::ma(ise_log_ts, order = 12, centre = TRUE)
+
+detrend_orig_ma <- ise_ts     - tendencia_orig_ma
+detrend_log_ma  <- ise_log_ts - tendencia_log_ma
+
+tiempo_num <- as.numeric(time(ise_ts))
+
+par(mfrow = c(2, 1), mar = c(3, 4, 2, 2))
+plot(ise_ts, main = "Tendencia MA(12) — serie original",
+     col = "gray50", ylab = "Original")
+lines(tiempo_num, as.numeric(tendencia_orig_ma), col = "red", lwd = 2)
+legend("topleft", legend = c("Original", "Tendencia MA(12)"),
+       col = c("gray50","red"), lty = 1, bty = "n")
+
+plot(ise_log_ts, main = "Tendencia MA(12) — serie logarítmica",
+     col = "gray50", ylab = "Log")
+lines(tiempo_num, as.numeric(tendencia_log_ma), col = "darkred", lwd = 2)
+legend("topleft", legend = c("Transformada", "Tendencia MA(12)"),
+       col = c("gray50","darkred"), lty = 1, bty = "n")
+par(mfrow = c(1, 1))
+
+par(mfrow = c(2, 1), mar = c(3, 4, 2, 2))
+plot(detrend_orig_ma, main = "Serie original sin tendencia (residuos MA)",
+     col = "steelblue", ylab = ""); abline(h = 0, lty = 2)
+plot(detrend_log_ma,  main = "Serie logarítmica sin tendencia (residuos MA)",
+     col = "darkgreen", ylab = ""); abline(h = 0, lty = 2)
+par(mfrow = c(1, 1))
+```
+
+## 4.2 Tendencia determinística lineal y cúbica (MCO)
+
+```{r tendencia_LM_cubico}
+tiempo_num <- as.numeric(time(ise_ts))
+y_num      <- as.numeric(ise_ts)
+
+fit_orig_lm    <- lm(y_num ~ tiempo_num)
+fit_orig_cubic <- lm(y_num ~ tiempo_num + I(tiempo_num^2) + I(tiempo_num^3))
+
+cat("\n=== Tendencia lineal (serie original) ===\n");   print(summary(fit_orig_lm))
+cat("\n=== Tendencia cúbica (serie original) ===\n");   print(summary(fit_orig_cubic))
+
+plot(ise_ts,
+     main = "ISE — tendencia lineal vs cúbica",
+     ylab = "Índice (Base 2015 = 100)", xlab = "Año",
+     col = "gray50", lwd = 1.5)
+lines(tiempo_num, fitted(fit_orig_lm),    col = "red",  lwd = 2)
+lines(tiempo_num, fitted(fit_orig_cubic), col = "blue", lwd = 2, lty = 2)
+legend("topleft",
+       legend = c("Serie ISE", "Tendencia lineal", "Tendencia cúbica"),
+       col = c("gray50","red","blue"), lty = c(1,1,2),
+       lwd = c(1.5,2,2), bty = "n")
+grid()
+
+detrend_orig_lm    <- ise_ts - ts(fitted(fit_orig_lm),    start = fecha_inicio, frequency = 12)
+detrend_orig_cubic <- ise_ts - ts(fitted(fit_orig_cubic), start = fecha_inicio, frequency = 12)
+
+par(mfrow = c(2, 2), mar = c(3, 4, 2, 2))
+plot(detrend_orig_lm, main = "Residuos: tendencia lineal",
+     col = "purple", ylab = "Residuos"); abline(h = 0, lty = 2)
+acf(detrend_orig_lm, lag.max = 36, main = "ACF — residual lineal")
+
+plot(detrend_orig_cubic, main = "Residuos: tendencia cúbica",
+     col = "darkorange", ylab = "Residuos"); abline(h = 0, lty = 2)
+acf(detrend_orig_cubic, lag.max = 36, main = "ACF — residual cúbico")
+par(mfrow = c(1, 1))
+```
+
+## 4.3 Tendencia no lineal por STL (Loess)
+
+```{r STL_analisis}
+stl_orig <- ise_tsbl %>%
+  model(STL(Iset     ~ trend(window = 13) + season(window = "periodic"), robust = TRUE))
+
+stl_log <- ise_tsbl %>%
+  model(STL(Iset_log ~ trend(window = 13) + season(window = "periodic"), robust = TRUE))
+
+components(stl_orig) %>% autoplot() +
+  labs(title = "Descomposición STL robusta — serie original")
+
+components(stl_log) %>% autoplot() +
+  labs(title = "Descomposición STL robusta — serie logarítmica")
+```
+
+## 4.4 Tendencia estocástica: primera diferencia del logaritmo
+
+```{r diff_log}
+ise_growth <- diff(log(ise_ts), differences = 1)
+
+par(mfrow = c(2, 1), mar = c(3, 4, 2, 2))
+plot(ise_growth, main = "Crecimiento mensual del ISE — diff.log(ISE)",
+     col = "steelblue", ylab = "diff.log(ISE)", lwd = 1.5)
+abline(h = 0, lty = 2, col = "red"); grid()
+acf(ise_growth, lag.max = 36, main = "ACF — diff.log(ISE)")
+par(mfrow = c(1, 1))
+```
+
+## 4.5 Tendencia determinística no lineal (Loess)
+
+```{r loess_tendencia}
+indice_ise <- as.Date(zoo::as.yearmon(time(ise_ts)))
+tibble_ise <- tibble(Fecha = indice_ise, Iset = as.numeric(ise_ts))
+
+tibble_ise <- tibble_ise %>%
+  mutate(Iset_ajus = smooth_vec(Iset, span = 0.25, degree = 2))
+
+tibble_ise %>%
+  ggplot(aes(Fecha, Iset)) +
+  geom_line() +
+  geom_line(aes(y = Iset_ajus), color = "red") +
+  labs(title = "ISE con tendencia ajustada por Loess (no lineal)",
+       y = "ISE")
+
+ise_trend_loess <- ts(tibble_ise$Iset_ajus, start = fecha_inicio, frequency = 12)
+ise_sin_tend    <- ise_ts - ise_trend_loess
+```
+
+## 4.6 Suavizamiento adicional: kernel, lowess y splines
+
+```{r suavizamiento_no_parametrico}
+plot(ise_ts, main = "Suavizamiento Kernel")
+lines(ksmooth(time(ise_ts), ise_ts, "normal", bandwidth = 1), lwd = 2, col = 4)
+
+plot(ise_ts, main = "Suavizamiento Lowess")
+lines(lowess(ise_ts, f = .05), lwd = 2, col = 4)
+lines(lowess(ise_ts), lty = 2, lwd = 2, col = 2)
+
+plot(ise_ts, main = "Suavizamiento Splines")
+lines(smooth.spline(time(ise_ts), ise_ts, spar = .5), lwd = 2, col = 4)
+lines(smooth.spline(time(ise_ts), ise_ts, spar = 1),  lty = 2, lwd = 2, col = 2)
+```
+
+---
+
+# PASO 5. Análisis de correlación y dependencia temporal (sobre diff.log(ISE))
+
+## 5.1 Gráficas de retardos (lag plots)
+
+```{r lag_plots}
+par(mar = c(2, 2, 2, 2))
+plot(ise_growth, main = "Crecimiento mensual del ISE — diff.log(ISE)",
+     col = "steelblue", lwd = 1.5); abline(h = 0, lty = 2, col = "red")
+
+par(mar = c(3, 2, 3, 2))
+astsa::lag1.plot(as.numeric(ise_growth), 12, corr = FALSE)
+
+ts_lags(ise_growth, lags = 1:12)
+```
+
+## 5.2 Función de autocorrelación (ACF) y autocorrelación parcial (PACF)
+
+```{r acf_pacf}
+par(mfrow = c(2, 1), mar = c(3, 4, 2, 2))
+acf(ise_growth,  48, main = "ACF — diff.log(ISE)")
+pacf(ise_growth, 48, main = "PACF — diff.log(ISE)")
+par(mfrow = c(1, 1))
+```
+
+## 5.3 No linealidad: información mutua promedio (AMI)
+
+```{r AMI_calculo}
+par(mar = c(3, 2, 3, 2))
+tseriesChaos::mutual(as.numeric(ise_growth), partitions = 50,
+                     lag.max = 48, plot = TRUE)
+```
+
+## 5.4 Autocorrelación de distancia (dACF)
+
+```{r dACF_calculo}
+calcular_dacf_interna <- function(serie, max_lag = 20) {
+  sapply(1:max_lag, function(k) {
+    n_k  <- length(serie)
+    x_t  <- serie[(k + 1):n_k]
+    x_tk <- serie[1:(n_k - k)]
+    energy::dcor(x_t, x_tk)
+  })
+}
+
+lags       <- 1:24
+d_acf_vals <- calcular_dacf_interna(as.numeric(ise_growth), max_lag = 24)
+
+plot(lags, d_acf_vals, type = "h",
+     main = "dACF — diff.log(ISE)",
+     col  = "darkgreen", ylim = c(0, 1), lwd = 2)
+abline(h = 2 / sqrt(length(ise_growth)), lty = 2, col = "blue")
+```
+
+---
+
+# PASO 6. Detección de ciclos y estacionalidad
+
+## 6.1 Mapa de calor (ts_heatmap)
+
+```{r heatmap_plot}
+ts_heatmap(ise_ts, title = "Mapa de calor — ISE", color = "Reds")
+```
+
+## 6.2 Análisis wavelet
+
+```{r wavelet_analisis}
+series_wavelets <- cbind(seq_len(length(ise_ts)), as.numeric(ise_ts))
+wt <- biwavelet::wt(series_wavelets)
+
+par(oma = c(0, 0, 0, 1), mar = c(5, 4, 4, 5) + 0.1)
+plot(wt, type = "power.corr.norm",
+     main = "Bias-corrected wavelet power", plot.cb = TRUE)
+```
+
+## 6.3 Monthplot del crecimiento mensual del ISE — diff.log(ISE)
+
+```{r monthplot_crecimiento}
+monthplot(ise_growth,
+          main = "Monthplot del crecimiento mensual del ISE",
+          ylab = "diff.log(ISE)", xlab = "Mes")
+abline(h = 0, lty = 2, col = "gray40")
+```
+
+## 6.4 Densidades por mes — tres versiones de la serie
+
+```{r densidad_tres_paneles, fig.height=8}
+ise_comp_df <- data.frame(
+  month     = factor(month.abb[cycle(ise_growth)], levels = month.abb),
+  diff_orig = as.numeric(diff(ise_ts)),
+  diff_log  = as.numeric(diff(ise_log_ts)),
+  diff_bc   = as.numeric(diff(ise_boxcox_ts))
+)
+
+p_orig <- ggplot(ise_comp_df, aes(x = diff_orig)) +
+  geom_density(aes(fill = month)) +
+  ggtitle("Original diferenciada") +
+  facet_grid(rows = vars(month)) +
+  theme(legend.position = "none")
+
+p_log <- ggplot(ise_comp_df, aes(x = diff_log)) +
+  geom_density(aes(fill = month)) +
+  ggtitle("Logarítmica diferenciada") +
+  facet_grid(rows = vars(month)) +
+  theme(legend.position = "none")
+
+p_box <- ggplot(ise_comp_df, aes(x = diff_bc)) +
+  geom_density(aes(fill = month)) +
+  ggtitle("Box-Cox diferenciada") +
+  facet_grid(rows = vars(month)) +
+  theme(legend.position = "none")
+
+p_orig | p_log | p_box
+```
+
+## 6.5 Herramientas adicionales de estacionalidad
+
+```{r mas_estacionalidad}
+ts_seasonal(ise_growth, type = "all")
+```
+
+---
+
+# PASO 7. Regresión para descubrir el ciclo y periodograma
+
+```{r regresion_ciclo}
+n_growth <- length(ise_growth)
+z1 <- cos(2 * pi * (1:n_growth) / 12)
+z2 <- sin(2 * pi * (1:n_growth) / 12)
+
+fit_ciclo <- lm(as.numeric(ise_growth) ~ 0 + z1 + z2)
+summary(fit_ciclo)
+
+plot.ts(as.numeric(ise_growth),
+        main = "diff.log(ISE) vs ajuste ciclo anual",
+        ylab = "diff.log(ISE)")
+abline(h = 0, lty = 2, col = "gray40")
+lines(fitted(fit_ciclo), col = 2, lwd = 2)
+```
+
+```{r periodograma_analisis}
+sp <- spectrum(as.numeric(ise_growth), taper = 0, log = "no",
+               main = "Periodograma — diff.log(ISE)")
+
+sp_suave <- spectrum(as.numeric(ise_growth), spans = c(3, 3), taper = 0.1,
+                     log = "no", main = "Periodograma suavizado — diff.log(ISE)")
+
+frecuencia_dominante <- sp$freq[which.max(sp$spec)]
+periodo_dominante    <- 1 / frecuencia_dominante
+cat("Frecuencia dominante:", frecuencia_dominante, "\n")
+cat("Periodo dominante:", periodo_dominante, "\n")
+```
+
+---
+
+# PASO 8. Modelado de la estacionalidad
+
+## 8.1 Variables Dummies (estacionalidad determinística mensual)
+
+```{r dummies_mensuales}
+n_growth <- length(ise_growth)
+mes      <- factor(cycle(ise_growth))
+
+dummies_mes <- model.matrix(~ 0 + mes)
+colnames(dummies_mes) <- levels(mes)
+
+df_dum <- data.frame(y = as.numeric(ise_growth), dummies_mes)
+
+fit_dum <- lm(y ~ ., data = df_dum)
+summary(fit_dum)
+
+plot.ts(as.numeric(ise_growth),
+        main = "diff.log(ISE) vs ajuste por Dummies mensuales",
+        ylab = "diff.log(ISE)")
+abline(h = 0, lty = 2, col = "gray40")
+lines(fitted(fit_dum), col = 3, lwd = 2)
+
+coef_dum <- coef(fit_dum)
+coef_dum
+```
+
+## 8.2 Armónicos de Fourier (K = 1, 6, 12)
+
+```{r fourier_columnas}
+tbl_ise_fourier <- data.frame(
+  Fecha  = as.Date(zoo::as.yearmon(time(ise_growth))),
+  growth = as.numeric(ise_growth)
+)
+
+t_seq <- seq_len(nrow(tbl_ise_fourier))
+
+for (k in 1:12) {
+  tbl_ise_fourier[[paste0("C", k, "_12")]] <- cos(2 * pi * k * t_seq / 12)
+  tbl_ise_fourier[[paste0("S", k, "_12")]] <- sin(2 * pi * k * t_seq / 12)
+}
+```
+
+```{r fourier_k1}
+Fourier1 <- lm(growth ~ C1_12 + S1_12, data = tbl_ise_fourier)
+summary(Fourier1)
+
+plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
+     main = "diff.log(ISE) vs Fourier (K = 1)",
+     ylab = "diff.log(ISE)", col = "gray60")
+abline(h = 0, lty = 2, col = "gray40")
+lines(tbl_ise_fourier$Fecha, Fourier1$fitted.values, col = 3, lwd = 2)
+```
+
+```{r fourier_k6}
+Fourier6 <- lm(growth ~ C1_12 + S1_12 + C2_12 + S2_12 +
+                        C3_12 + S3_12 + C4_12 + S4_12 +
+                        C5_12 + S5_12 + C6_12 + S6_12,
+               data = tbl_ise_fourier)
+summary(Fourier6)
+
+plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
+     main = "diff.log(ISE) vs Fourier (K = 6)",
+     ylab = "diff.log(ISE)", col = "gray60")
+abline(h = 0, lty = 2, col = "gray40")
+lines(tbl_ise_fourier$Fecha, Fourier6$fitted.values, col = 3, lwd = 2)
+```
+
+```{r fourier_k12}
+Fourier12 <- lm(growth ~ C1_12  + S1_12  + C2_12  + S2_12  +
+                        C3_12  + S3_12  + C4_12  + S4_12  +
+                        C5_12  + S5_12  + C6_12  + S6_12  +
+                        C7_12  + S7_12  + C8_12  + S8_12  +
+                        C9_12  + S9_12  + C10_12 + S10_12 +
+                        C11_12 + S11_12 + C12_12 + S12_12,
+               data = tbl_ise_fourier)
+summary(Fourier12)
+
+plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
+     main = "diff.log(ISE) vs Fourier (K = 12)",
+     ylab = "diff.log(ISE)", col = "gray60")
+abline(h = 0, lty = 2, col = "gray40")
+lines(tbl_ise_fourier$Fecha, Fourier12$fitted.values, col = 3, lwd = 2)
+```
+
+```{r fourier_comparativa}
+plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
+     main = "Comparación de armónicos de Fourier — diff.log(ISE)",
+     ylab = "diff.log(ISE)", col = "gray70")
+abline(h = 0, lty = 2, col = "gray40")
+lines(tbl_ise_fourier$Fecha, Fourier1$fitted.values,  col = "red",       lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier6$fitted.values,  col = "blue",      lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier12$fitted.values, col = "darkgreen", lwd = 2)
+legend("topleft",
+       legend = c("K = 1", "K = 6", "K = 12"),
+       col = c("red","blue","darkgreen"),
+       lty = 1, lwd = 2, bty = "n")
+```
+
+---
+
+# PASO 9. Desestacionalización
+
+```{r desestacionalizacion_serie}
+ise_decompo <- decompose(ise_ts)
+ise_desestacionalizada <- ise_ts - ise_decompo$seasonal
+
+plot(ise_ts, main = "ISE original vs desestacionalizada",
+     ylab = "Índice (Base 2015 = 100)", col = "gray50", lwd = 1.5)
+lines(as.numeric(time(ise_ts)), as.numeric(ise_desestacionalizada),
+      col = "red", lwd = 2)
+legend("topleft", legend = c("Original", "Desestacionalizada"),
+       col = c("gray50","red"), lty = 1, lwd = c(1.5,2), bty = "n")
+grid()
+
+diff_estacional <- diff(ise_ts, lag = 12, differences = 1)
+plot(diff_estacional, main = "ISE con diferencia estacional (lag = 12)",
+     ylab = "diff(ISE, 12)", col = "steelblue", lwd = 1.5)
+abline(h = 0, lty = 2, col = "red")
+acf(diff_estacional, lag.max = 48, main = "ACF — ISE diferenciada estacionalmente")
+```
