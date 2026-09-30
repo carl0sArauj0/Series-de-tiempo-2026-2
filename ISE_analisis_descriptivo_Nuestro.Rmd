@@ -558,5 +558,5 @@ diff_estacional <- diff(ise_ts, lag = 12, differences = 1)
 plot(diff_estacional, main = "ISE con diferencia estacional (lag = 12)",
      ylab = "diff(ISE, 12)", col = "steelblue", lwd = 1.5)
 abline(h = 0, lty = 2, col = "red")
-acf(diff_estacional, lag.max = 48, main = "ACF — ISE diferenciada estacionalmente")
+
 ```
