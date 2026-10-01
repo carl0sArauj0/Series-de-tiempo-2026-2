@@ -466,7 +466,7 @@ coef_dum <- coef(fit_dum)
 coef_dum
 ```
 
-## 8.2 Armónicos de Fourier (K = 1, 6, 12)
+## 8.2 Armónicos de Fourier (K = 2, 4, 6: Límite de Nyquist)
 
 ```{r fourier_columnas}
 tbl_ise_fourier <- data.frame(
@@ -476,52 +476,51 @@ tbl_ise_fourier <- data.frame(
 
 t_seq <- seq_len(nrow(tbl_ise_fourier))
 
-for (k in 1:12) {
+# Generar armónicos hasta el límite teórico de Nyquist (k = 6)
+for (k in 1:6) {
   tbl_ise_fourier[[paste0("C", k, "_12")]] <- cos(2 * pi * k * t_seq / 12)
   tbl_ise_fourier[[paste0("S", k, "_12")]] <- sin(2 * pi * k * t_seq / 12)
 }
 ```
 
-```{r fourier_k1}
-Fourier1 <- lm(growth ~ C1_12 + S1_12, data = tbl_ise_fourier)
-summary(Fourier1)
+```{r fourier_k2}
+Fourier2 <- lm(growth ~ C1_12 + S1_12 + C2_12 + S2_12, 
+               data = tbl_ise_fourier)
+summary(Fourier2)
 
 plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
-     main = "diff.log(ISE) vs Fourier (K = 1)",
+     main = "diff.log(ISE) vs Fourier (K = 2: semestral)",
      ylab = "diff.log(ISE)", col = "gray60")
 abline(h = 0, lty = 2, col = "gray40")
-lines(tbl_ise_fourier$Fecha, Fourier1$fitted.values, col = 3, lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier2$fitted.values, col = 3, lwd = 2)
+```
+
+```{r fourier_k4}
+Fourier4 <- lm(growth ~ C1_12 + S1_12 + C2_12 + S2_12 +
+                        C3_12 + S3_12 + C4_12 + S4_12,
+               data = tbl_ise_fourier)
+summary(Fourier4)
+
+plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
+     main = "diff.log(ISE) vs Fourier (K = 4: trimestral dominante)",
+     ylab = "diff.log(ISE)", col = "gray60")
+abline(h = 0, lty = 2, col = "gray40")
+lines(tbl_ise_fourier$Fecha, Fourier4$fitted.values, col = 3, lwd = 2)
 ```
 
 ```{r fourier_k6}
+# En k = 6 solo se incluye el coseno C6_12 porque sin(pi * t) = 0 para todo t entero
 Fourier6 <- lm(growth ~ C1_12 + S1_12 + C2_12 + S2_12 +
                         C3_12 + S3_12 + C4_12 + S4_12 +
-                        C5_12 + S5_12 + C6_12 + S6_12,
+                        C5_12 + S5_12 + C6_12,
                data = tbl_ise_fourier)
 summary(Fourier6)
 
 plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
-     main = "diff.log(ISE) vs Fourier (K = 6)",
+     main = "diff.log(ISE) vs Fourier (K = 6: conjunto armónico completo)",
      ylab = "diff.log(ISE)", col = "gray60")
 abline(h = 0, lty = 2, col = "gray40")
 lines(tbl_ise_fourier$Fecha, Fourier6$fitted.values, col = 3, lwd = 2)
-```
-
-```{r fourier_k12}
-Fourier12 <- lm(growth ~ C1_12  + S1_12  + C2_12  + S2_12  +
-                        C3_12  + S3_12  + C4_12  + S4_12  +
-                        C5_12  + S5_12  + C6_12  + S6_12  +
-                        C7_12  + S7_12  + C8_12  + S8_12  +
-                        C9_12  + S9_12  + C10_12 + S10_12 +
-                        C11_12 + S11_12 + C12_12 + S12_12,
-               data = tbl_ise_fourier)
-summary(Fourier12)
-
-plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
-     main = "diff.log(ISE) vs Fourier (K = 12)",
-     ylab = "diff.log(ISE)", col = "gray60")
-abline(h = 0, lty = 2, col = "gray40")
-lines(tbl_ise_fourier$Fecha, Fourier12$fitted.values, col = 3, lwd = 2)
 ```
 
 ```{r fourier_comparativa}
@@ -529,16 +528,15 @@ plot(tbl_ise_fourier$Fecha, tbl_ise_fourier$growth, type = "l",
      main = "Comparación de armónicos de Fourier — diff.log(ISE)",
      ylab = "diff.log(ISE)", col = "gray70")
 abline(h = 0, lty = 2, col = "gray40")
-lines(tbl_ise_fourier$Fecha, Fourier1$fitted.values,  col = "red",       lwd = 2)
-lines(tbl_ise_fourier$Fecha, Fourier6$fitted.values,  col = "blue",      lwd = 2)
-lines(tbl_ise_fourier$Fecha, Fourier12$fitted.values, col = "darkgreen", lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier2$fitted.values, col = "red",       lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier4$fitted.values, col = "blue",      lwd = 2)
+lines(tbl_ise_fourier$Fecha, Fourier6$fitted.values, col = "darkgreen", lwd = 2)
 legend("topleft",
-       legend = c("K = 1", "K = 6", "K = 12"),
-       col = c("red","blue","darkgreen"),
+       legend = c("K = 2 (Semestral)", "K = 4 (Trimestral)", "K = 6 (Completo)"),
+       col = c("red", "blue", "darkgreen"),
        lty = 1, lwd = 2, bty = "n")
 ```
 
----
 
 # PASO 9. Desestacionalización
 
